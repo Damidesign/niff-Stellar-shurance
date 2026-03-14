@@ -1,4 +1,4 @@
-# niffyInsure
+# niffyInsur
 
 > **Decentralized parametric insurance with community-governed claim resolution**
 
