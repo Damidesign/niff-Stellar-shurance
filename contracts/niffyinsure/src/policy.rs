@@ -1,17 +1,19 @@
 use crate::{
+    calculator,
+    ledger,
     premium,
     storage,
     token,
+<<<<<<< HEAD
     types::{Policy, PolicyType, PremiumQuote, RegionTier, RiskInput},
+=======
+    types::{AgeBand, CoverageType, Policy, PolicyType, PremiumQuote, RegionTier, RiskInput},
+>>>>>>> f31c36f7aaafe0e6592326e70bf1e4291a0fcd67
     validate::{self, Error},
 };
 use soroban_sdk::{contractevent, contracterror, contracttype, Address, Env, String};
 
-/// How long a quote stays valid (in ledgers) from generation time.
-pub const QUOTE_TTL_LEDGERS: u32 = 100;
-
-/// Default policy duration in ledgers (~30 days at 5s/ledger ≈ 518_400).
-pub const POLICY_DURATION_LEDGERS: u32 = 518_400;
+pub use ledger::QUOTE_TTL_LEDGERS;
 
 /// Current event schema version for PolicyInitiated.
 pub const POLICY_EVENT_VERSION: u32 = 1;
@@ -160,6 +162,13 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         Error::ReasonTooLong => "termination reason exceeds maximum length",
         Error::ClaimAlreadyTerminal => "claim already reached a terminal status",
         Error::DuplicateVote => "duplicate vote detected",
+        Error::CalculatorNotSet => "no external calculator configured",
+        Error::CalculatorCallFailed => "cross-contract call to premium calculator failed",
+        Error::CalculatorPaused => "premium calculator is paused; policy bind rejected",
+        Error::VotingWindowClosed => "voting window has closed; use finalize_claim",
+        Error::VotingWindowStillOpen => "voting window is still open; cannot finalize yet",
+        Error::NotEligibleVoter => "caller is not in the claim voter snapshot",
+        Error::RateLimitExceeded => "claim rate-limit: wait before filing another claim",
     };
     QuoteFailure {
         code: err as u32,
@@ -222,9 +231,28 @@ pub fn initiate_policy(
         return Err(PolicyError::InvalidCoverage);
     }
 
+<<<<<<< HEAD
     // 5. Compute premium (smallest units / stroops)
     let premium_amount = premium::compute_premium_checked(&policy_type, &region, age, risk_score)
         .ok_or(PolicyError::PremiumOverflow)?;
+=======
+    // 4. Compute premium via the calculator (external or local fallback).
+    //    Map calculator errors to PolicyError so callers get a typed failure.
+    let risk_input = crate::types::RiskInput {
+        region: region.clone(),
+        age_band: age_to_band(age),
+        coverage: risk_score_to_coverage(risk_score),
+        safety_score: 0,
+    };
+    let base_amount = coverage / 10; // 10% of coverage as base
+    let quote = crate::calculator::compute_quote(env, &risk_input, base_amount, false, QUOTE_TTL_LEDGERS)
+        .map_err(|e| match e {
+            validate::Error::CalculatorPaused => PolicyError::ContractPaused,
+            validate::Error::CalculatorCallFailed | validate::Error::CalculatorNotSet => PolicyError::PremiumOverflow,
+            _ => PolicyError::PremiumOverflow,
+        })?;
+    let premium_amount = quote.total_premium;
+>>>>>>> f31c36f7aaafe0e6592326e70bf1e4291a0fcd67
     if premium_amount <= 0 {
         return Err(PolicyError::InvalidPremium);
     }
@@ -243,7 +271,7 @@ pub fn initiate_policy(
     // 8. Build and validate policy struct
     let current_ledger = env.ledger().sequence();
     let end_ledger = current_ledger
-        .checked_add(POLICY_DURATION_LEDGERS)
+        .checked_add(ledger::POLICY_DURATION_LEDGERS)
         .ok_or(PolicyError::LedgerOverflow)?;
 
     let policy = Policy {
@@ -261,8 +289,13 @@ pub fn initiate_policy(
 
     validate::check_policy(&policy).map_err(|_| PolicyError::PolicyValidation)?;
 
+<<<<<<< HEAD
     // 9. Persist policy
     storage::set_policy(env, &holder, policy_id, &policy);
+=======
+    // 8. Persist policy
+    storage::set_policy(env, &policy);
+>>>>>>> f31c36f7aaafe0e6592326e70bf1e4291a0fcd67
 
     // 10. Update voter registry
     storage::add_voter(env, &holder);
@@ -283,4 +316,24 @@ pub fn initiate_policy(
     .publish(env);
 
     Ok(policy)
+}
+
+fn age_to_band(age: u32) -> crate::types::AgeBand {
+    if age < 30 {
+        crate::types::AgeBand::Young
+    } else if age < 60 {
+        crate::types::AgeBand::Adult
+    } else {
+        crate::types::AgeBand::Senior
+    }
+}
+
+fn risk_score_to_coverage(risk_score: u32) -> crate::types::CoverageType {
+    if risk_score <= 3 {
+        crate::types::CoverageType::Basic
+    } else if risk_score <= 7 {
+        crate::types::CoverageType::Standard
+    } else {
+        crate::types::CoverageType::Premium
+    }
 }
