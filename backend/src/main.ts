@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger, LogLevel } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule);
   
   // Global prefix
   app.setGlobalPrefix('api');
@@ -27,10 +27,10 @@ async function bootstrap() {
   }));
   
   // Exception filter
-app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalFilters(new HttpExceptionFilter());
   
   // Swagger
-  const config = new DocumentBuilder()
+  const swaggerConfig = new DocumentBuilder()
     .setTitle('NiffyInsure Backend')
     .setDescription('Stellar insurance API')
     .setVersion('0.1.0')
@@ -39,12 +39,12 @@ app.useGlobalFilters(new HttpExceptionFilter());
       'JWT-auth',
     )
     .build();
-  const document = SwaggerModule.createDocument(app, config);
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, document);
 
-  const configService = app.get('ConfigService');
-  const port = configService.get<number>('PORT', 3000);
-  await app.listen(port);
+  const configService = app.get(ConfigService);
+  const port = configService.get<number>('PORT') || 3000;
+  
   await app.listen(port, '0.0.0.0');
   Logger.log(`🚀 Application is running on: http://localhost:${port}/api`, 'Bootstrap');
   Logger.log(`📚 Swagger docs: http://localhost:${port}/docs`, 'Bootstrap');
