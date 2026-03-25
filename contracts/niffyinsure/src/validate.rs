@@ -47,6 +47,14 @@ pub enum Error {
     CalculatorCallFailed = 34,
     /// Calculator is paused; bind fails closed.
     CalculatorPaused = 35,
+    /// Voting window has already closed; use finalize_claim instead.
+    VotingWindowClosed = 36,
+    /// Voting window is still open; cannot finalize yet.
+    VotingWindowStillOpen = 37,
+    /// Caller is not in the claim's voter snapshot.
+    NotEligibleVoter = 38,
+    /// Claim filing rate-limit has not elapsed since the last filing.
+    RateLimitExceeded = 39,
 }
 
 pub fn check_policy(policy: &Policy) -> Result<(), Error> {
@@ -108,7 +116,7 @@ pub fn check_reason(reason: &String) -> Result<(), Error> {
 }
 
 pub fn check_claim_open(claim: &Claim) -> Result<(), Error> {
-    if claim.status != crate::types::ClaimStatus::Pending {
+    if claim.status != crate::types::ClaimStatus::Processing {
         return Err(Error::ClaimAlreadyTerminal);
     }
     Ok(())

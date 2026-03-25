@@ -1,4 +1,6 @@
 use crate::{
+    calculator,
+    ledger,
     premium,
     storage,
     token,
@@ -7,11 +9,7 @@ use crate::{
 };
 use soroban_sdk::{contractevent, contracterror, contracttype, Address, Env, String};
 
-/// How long a quote stays valid (in ledgers) from generation time.
-pub const QUOTE_TTL_LEDGERS: u32 = 100;
-
-/// Default policy duration in ledgers (~30 days at 5s/ledger ≈ 518_400).
-pub const POLICY_DURATION_LEDGERS: u32 = 518_400;
+pub use ledger::QUOTE_TTL_LEDGERS;
 
 /// Current event schema version for PolicyInitiated.
 pub const POLICY_EVENT_VERSION: u32 = 1;
@@ -161,6 +159,10 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         Error::CalculatorNotSet => "no external calculator configured",
         Error::CalculatorCallFailed => "cross-contract call to premium calculator failed",
         Error::CalculatorPaused => "premium calculator is paused; policy bind rejected",
+        Error::VotingWindowClosed => "voting window has closed; use finalize_claim",
+        Error::VotingWindowStillOpen => "voting window is still open; cannot finalize yet",
+        Error::NotEligibleVoter => "caller is not in the claim voter snapshot",
+        Error::RateLimitExceeded => "claim rate-limit: wait before filing another claim",
     };
     QuoteFailure {
         code: err as u32,
@@ -253,7 +255,7 @@ pub fn initiate_policy(
     // 7. Build and validate policy struct
     let current_ledger = env.ledger().sequence();
     let end_ledger = current_ledger
-        .checked_add(POLICY_DURATION_LEDGERS)
+        .checked_add(ledger::POLICY_DURATION_LEDGERS)
         .ok_or(PolicyError::LedgerOverflow)?;
 
     let policy = Policy {
@@ -272,7 +274,7 @@ pub fn initiate_policy(
     validate::check_policy(&policy).map_err(|_| PolicyError::PolicyValidation)?;
 
     // 8. Persist policy
-    storage::set_policy(env, &holder, policy_id, &policy);
+    storage::set_policy(env, &policy);
 
     // 9. Update voter registry
     storage::add_voter(env, &holder);

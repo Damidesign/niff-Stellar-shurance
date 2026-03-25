@@ -1,34 +1,33 @@
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
-use crate::types::{Claim, MultiplierTable, Policy};
+use crate::types::{Claim, MultiplierTable, Policy, VoteOption};
 
-// ── TTL constants ─────────────────────────────────────────────────────────────
-/// Minimum TTL threshold before we extend (in ledgers).
 pub const PERSISTENT_TTL_THRESHOLD: u32 = 100_000;
-/// Target TTL after extension (in ledgers, ~1 year).
 pub const PERSISTENT_TTL_EXTEND_TO: u32 = 6_000_000;
 
 // ── DataKey ───────────────────────────────────────────────────────────────────
 #[contracttype]
 pub enum DataKey {
-    // ── Instance tier ────────────────────────────────────────────────────
+    // Instance tier
     Admin,
     PendingAdmin,
     Token,
     PremiumTable,
-    /// Address of the external PremiumCalculator contract (optional).
     CalcAddress,
     AllowedAsset(Address),
     Voters,
     ClaimCounter,
     Paused,
     ActivePolicyCount(Address),
-    // ── Persistent tier ──────────────────────────────────────────────────
+    // Persistent tier
     Policy(Address, u32),
     PolicyCounter(Address),
     Claim(u64),
     Vote(u64, Address),
+    /// Snapshot of eligible voters captured at claim-filing time.
     ClaimVoters(u64),
+    /// Last ledger at which `holder` filed a claim (rate-limit anchor).
+    LastClaimLedger(Address),
 }
 
 // ── Instance bump ─────────────────────────────────────────────────────────────
@@ -75,18 +74,15 @@ pub fn get_token(env: &Env) -> Address {
 }
 
 // ── External calculator address ───────────────────────────────────────────────
-
-/// Store the address of the external PremiumCalculator contract.
 pub fn set_calc_address(env: &Env, addr: &Address) {
     env.storage().instance().set(&DataKey::CalcAddress, addr);
 }
 
-/// Returns the external calculator address, or `None` if not configured.
 pub fn get_calc_address(env: &Env) -> Option<Address> {
     env.storage().instance().get(&DataKey::CalcAddress)
 }
 
-// ── Multiplier table (fallback / local) ──────────────────────────────────────
+// ── Multiplier table ──────────────────────────────────────────────────────────
 pub fn set_multiplier_table(env: &Env, table: &MultiplierTable) {
     env.storage().instance().set(&DataKey::PremiumTable, table);
 }
@@ -114,6 +110,11 @@ pub fn set_claim(env: &Env, claim: &Claim) {
     env.storage()
         .persistent()
         .set(&DataKey::Claim(claim.claim_id), claim);
+    env.storage().persistent().extend_ttl(
+        &DataKey::Claim(claim.claim_id),
+        PERSISTENT_TTL_THRESHOLD,
+        PERSISTENT_TTL_EXTEND_TO,
+    );
 }
 
 pub fn get_claim(env: &Env, claim_id: u64) -> Option<Claim> {
@@ -138,6 +139,54 @@ pub fn get_claim_counter(env: &Env) -> u64 {
         .instance()
         .get(&DataKey::ClaimCounter)
         .unwrap_or(0u64)
+}
+
+// ── Vote (persistent) ─────────────────────────────────────────────────────────
+pub fn set_vote(env: &Env, claim_id: u64, voter: &Address, vote: &VoteOption) {
+    let key = DataKey::Vote(claim_id, voter.clone());
+    env.storage().persistent().set(&key, vote);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+}
+
+pub fn get_vote(env: &Env, claim_id: u64, voter: &Address) -> Option<VoteOption> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Vote(claim_id, voter.clone()))
+}
+
+// ── Claim voter snapshot ──────────────────────────────────────────────────────
+
+/// Capture the current live voter set as the immutable electorate for `claim_id`.
+pub fn snapshot_claim_voters(env: &Env, claim_id: u64) {
+    let voters = get_voters(env);
+    let key = DataKey::ClaimVoters(claim_id);
+    env.storage().persistent().set(&key, &voters);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+}
+
+pub fn get_claim_voters(env: &Env, claim_id: u64) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ClaimVoters(claim_id))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+// ── Rate-limit anchor ─────────────────────────────────────────────────────────
+
+pub fn set_last_claim_ledger(env: &Env, holder: &Address, ledger: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::LastClaimLedger(holder.clone()), &ledger);
+}
+
+pub fn get_last_claim_ledger(env: &Env, holder: &Address) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::LastClaimLedger(holder.clone()))
 }
 
 // ── Policy counter (persistent) ───────────────────────────────────────────────
@@ -165,10 +214,13 @@ pub fn has_policy(env: &Env, holder: &Address, policy_id: u32) -> bool {
         .has(&DataKey::Policy(holder.clone(), policy_id))
 }
 
-pub fn set_policy(env: &Env, holder: &Address, policy_id: u32, policy: &Policy) {
+/// Store a policy.  Key is derived from `policy.holder` and `policy.policy_id`.
+pub fn set_policy(env: &Env, policy: &Policy) {
+    let key = DataKey::Policy(policy.holder.clone(), policy.policy_id);
+    env.storage().persistent().set(&key, policy);
     env.storage()
         .persistent()
-        .set(&DataKey::Policy(holder.clone(), policy_id), policy);
+        .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
 }
 
 pub fn get_policy(env: &Env, holder: &Address, policy_id: u32) -> Option<Policy> {

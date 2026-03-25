@@ -3,14 +3,16 @@
 mod admin;
 mod calculator;
 mod claim;
+pub mod ledger;
 mod policy;
 mod premium;
-mod storage;
+pub mod storage;
 mod token;
 pub mod types;
 pub mod validate;
 
 use soroban_sdk::{contract, contractimpl, contracterror, Address, Env, String, Vec};
+use types::ClaimStatus;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -24,8 +26,6 @@ pub struct NiffyInsure;
 
 #[contractimpl]
 impl NiffyInsure {
-    /// One-time initialisation: store admin and token contract address, and
-    /// seed the default premium table so quote generation is deterministic.
     pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), InitError> {
         if env.storage().instance().has(&storage::DataKey::Admin) {
             return Err(InitError::AlreadyInitialized);
@@ -37,21 +37,14 @@ impl NiffyInsure {
         Ok(())
     }
 
-    // ── Admin: read ───────────────────────────────────────────────────────────
+    // ── Admin reads ───────────────────────────────────────────────────────────
 
     pub fn get_admin(env: Env) -> Address {
         storage::get_admin(&env)
     }
 
-    // ── Admin: calculator address management ──────────────────────────────────
+    // ── Calculator address management ─────────────────────────────────────────
 
-    /// Admin-only: point the policy contract at an external PremiumCalculator.
-    ///
-    /// After this call `generate_premium` and `initiate_policy` will delegate
-    /// pricing to the remote contract.  Set to the zero address (or call
-    /// `clear_calculator`) to revert to the built-in engine.
-    ///
-    /// Emits: ("calc", "set") → (old_addr_or_none, new_addr)
     pub fn set_calculator(env: Env, calc_addr: Address) {
         let admin = storage::get_admin(&env);
         admin.require_auth();
@@ -63,12 +56,10 @@ impl NiffyInsure {
         );
     }
 
-    /// Returns the currently configured calculator address, if any.
     pub fn get_calculator(env: Env) -> Option<Address> {
         storage::get_calc_address(&env)
     }
 
-    /// Admin-only: remove the external calculator, reverting to built-in pricing.
     pub fn clear_calculator(env: Env) {
         let admin = storage::get_admin(&env);
         admin.require_auth();
@@ -81,8 +72,6 @@ impl NiffyInsure {
 
     // ── Premium / quote ───────────────────────────────────────────────────────
 
-    /// Pure quote path: reads config and computes premium only.
-    /// Routes to the external calculator when one is configured.
     pub fn generate_premium(
         env: Env,
         input: types::RiskInput,
@@ -98,7 +87,7 @@ impl NiffyInsure {
             &input,
             base_amount,
             include_breakdown,
-            policy::QUOTE_TTL_LEDGERS,
+            ledger::QUOTE_TTL_LEDGERS,
         )
     }
 
@@ -138,6 +127,10 @@ impl NiffyInsure {
             33 => validate::Error::CalculatorNotSet,
             34 => validate::Error::CalculatorCallFailed,
             35 => validate::Error::CalculatorPaused,
+            36 => validate::Error::VotingWindowClosed,
+            37 => validate::Error::VotingWindowStillOpen,
+            38 => validate::Error::NotEligibleVoter,
+            39 => validate::Error::RateLimitExceeded,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -166,6 +159,44 @@ impl NiffyInsure {
         claim::is_allowed_asset(&env, &asset)
     }
 
+    // ── Claim lifecycle ───────────────────────────────────────────────────────
+
+    /// File a new claim against an active policy.
+    pub fn file_claim(
+        env: Env,
+        holder: Address,
+        policy_id: u32,
+        amount: i128,
+        details: String,
+        image_urls: Vec<String>,
+    ) -> Result<u64, validate::Error> {
+        if storage::is_paused(&env) {
+            return Err(validate::Error::PolicyInactive);
+        }
+        holder.require_auth();
+        claim::file_claim(&env, &holder, policy_id, amount, &details, &image_urls)
+    }
+
+    /// Cast a vote on a pending claim.
+    pub fn vote_on_claim(
+        env: Env,
+        voter: Address,
+        claim_id: u64,
+        vote: types::VoteOption,
+    ) -> Result<ClaimStatus, validate::Error> {
+        if storage::is_paused(&env) {
+            return Err(validate::Error::PolicyInactive);
+        }
+        voter.require_auth();
+        claim::vote_on_claim(&env, &voter, claim_id, &vote)
+    }
+
+    /// Finalize a claim after the voting deadline has passed.
+    pub fn finalize_claim(env: Env, claim_id: u64) -> Result<ClaimStatus, validate::Error> {
+        claim::finalize_claim(&env, claim_id)
+    }
+
+    /// Admin-only: trigger payout for an already-approved claim.
     pub fn process_claim(env: Env, claim_id: u64) -> Result<(), validate::Error> {
         let admin = storage::get_admin(&env);
         admin.require_auth();
@@ -228,8 +259,6 @@ impl NiffyInsure {
         admin::unpause(&env);
     }
 
-    // ── Admin rotation ────────────────────────────────────────────────────────
-
     pub fn propose_admin(env: Env, new_admin: Address) {
         admin::propose_admin(&env, new_admin);
     }
@@ -260,12 +289,10 @@ impl NiffyInsure {
             premium: 10_000_000,
             coverage,
             is_active: true,
-            start_ledger: 1,
+            start_ledger: 0,
             end_ledger,
         };
-        env.storage()
-            .persistent()
-            .set(&storage::DataKey::Policy(holder.clone(), policy_id), &policy);
+        storage::set_policy(&env, &policy);
         storage::add_voter(&env, &holder);
     }
 
