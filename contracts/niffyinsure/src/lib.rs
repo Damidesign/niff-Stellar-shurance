@@ -103,7 +103,6 @@ impl NiffyInsure {
     // drain
     // implemented in token.rs — issue: feat/admin
 }
-=======
 #![no_std]
 
 mod claim;
