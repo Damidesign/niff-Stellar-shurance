@@ -6,15 +6,6 @@ const withBundleAnalyzer = bundleAnalyzer({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    optimizeCss: true,
-    optimizePackageImports: [
-      'lucide-react',
-      '@radix-ui/react-dialog',
-      '@radix-ui/react-select',
-      '@radix-ui/react-toast',
-    ],
-  },
   images: {
     formats: ['image/avif', 'image/webp'],
     deviceSizes: [640, 750, 828, 1080, 1200],
@@ -26,7 +17,6 @@ const nextConfig = {
   },
   poweredByHeader: false,
   reactStrictMode: true,
-  swcMinify: true,
 }
 
 export default withBundleAnalyzer(nextConfig)

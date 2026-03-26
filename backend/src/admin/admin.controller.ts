@@ -21,6 +21,12 @@ import { ReindexDto } from './dto/reindex.dto';
 import { AuditQueryDto } from './dto/audit-query.dto';
 import { FeatureFlagDto } from './dto/feature-flag.dto';
 
+type AdminRequest = Request & {
+  user?: {
+    walletAddress?: string;
+  };
+};
+
 @ApiTags('admin')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard, AdminRoleGuard)
@@ -43,8 +49,8 @@ export class AdminController {
   @Post('reindex')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({ summary: 'Enqueue a ledger reindex job from a given ledger' })
-  async reindex(@Body() dto: ReindexDto, @Req() req: Request) {
-    const actor = (req.user as any)?.walletAddress ?? 'unknown';
+  async reindex(@Body() dto: ReindexDto, @Req() req: AdminRequest) {
+    const actor = req.user?.walletAddress ?? 'unknown';
     const jobId = await this.adminService.enqueueReindex(dto.fromLedger);
     await this.auditService.write({
       actor,
@@ -95,9 +101,9 @@ export class AdminController {
   async setFeatureFlag(
     @Param('key') key: string,
     @Body() dto: FeatureFlagDto,
-    @Req() req: Request,
+    @Req() req: AdminRequest,
   ) {
-    const actor = (req.user as any)?.walletAddress ?? 'unknown';
+    const actor = req.user?.walletAddress ?? 'unknown';
     const flag = await this.adminService.setFeatureFlag(key, dto.enabled, dto.description, actor);
     await this.auditService.write({
       actor,
