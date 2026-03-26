@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { inter, ibmPlexMono } from "@/lib/fonts";
@@ -57,13 +58,15 @@ export const metadata: Metadata = {
   },
 };
 
-import { ThemeProvider } from "@/components/theme-provider";
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Read the nonce injected by middleware.ts so Next.js inline scripts
+  // (chunk loader, __NEXT_DATA__) satisfy the nonce-based CSP.
+  const nonce = (await headers()).get('x-nonce') ?? undefined
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`} suppressHydrationWarning>
-      <head>
-        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <html lang="en" className={`${inter.variable} ${ibmPlexMono.variable}`}>
+      <head nonce={nonce}>
+        <link rel="icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <link rel="manifest" href="/site.webmanifest" />
       </head>
